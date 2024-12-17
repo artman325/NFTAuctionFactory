@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity >=0.8.0 <0.9.0;
 
 //import "@intercoin/auction/contracts/interfaces/IAuction.sol";
@@ -38,7 +39,17 @@ contract NFTAuctionFactory is Ownable {
     }
 
     mapping(address => auctionInfo) public auctions;
-    mapping(address => address[]) public offchainWinners;
+
+    // struct offchainBid {
+    //     address bidder;
+    //     uint256 amount;
+    // }
+    //mapping(address => offchainBid[]) public offchainBidders;
+    mapping(address => mapping(address => uint256)) public offchainBidders;
+    mapping(address => mapping(address => address)) private _nextOffchainBidder;
+    mapping(address => uint256) public offchainSizeList;
+    
+    address constant GUARD = address(1);
     
     /**
      * 
@@ -50,6 +61,7 @@ contract NFTAuctionFactory is Ownable {
     ) 
     {
         auctionFactoryAddress = auctionFactoryAddressF;
+        
     }
 
     /**
@@ -123,24 +135,28 @@ contract NFTAuctionFactory is Ownable {
 
         Ownable(auction).transferOwnership(msg.sender);
 
+        _nextOffchainBidder[auction][GUARD] = GUARD;
     }
 
     /**
-     * added offchain winner
-     * there are simple logic "last added offchainwinner go first"
-     * after offchain winners takes from auction
+     * added offchain bid
+     * there are simple logic "adding offchain bidder"
+     * offchain and onchain bidder will intersect on auction
      * 
      * @param auctionAddress auction
      * @param winner winner 
+     * @param amount bidamount
      */
-    function addOffchainWinner(
+    function addOffchainBid(
         address auctionAddress,
-        address winner
+        address winner,
+        uint256 amount
     ) 
         public 
         onlyOwner
     {
-        offchainWinners[auctionAddress].push(winner);
+        _addOffchainBid(auctionAddress, winner, amount);
+        //offchainWinners[auctionAddress].push(winner);
     }
 
     function claim(
@@ -191,6 +207,7 @@ contract NFTAuctionFactory is Ownable {
 
     )
         internal 
+        view
     {
         uint256 orderInClaim = requireWinner(auctionAddress, sender);
 
@@ -216,6 +233,7 @@ contract NFTAuctionFactory is Ownable {
         address sender
     )
         internal
+        view
         returns(uint256 orderInClaim)
     {
         // check it is our auction
@@ -228,7 +246,28 @@ contract NFTAuctionFactory is Ownable {
 
     }
     
+    function findInOffchain(
+        address auction,
+        address addrIndex, 
+        uint256 compareAmount
+    )
+        internal 
+        view 
+        returns(address nextAddrIndex)
+    {
 
+    }
+    function findInOnchain(
+        uint256 index, 
+        uint256 compareAmount,
+        IAuction.BidStruct[] memory result
+    )
+        internal 
+        view 
+        returns(uint256 nextIndex)
+    {
+
+    }
     /**
      * @dev it's not index in auction winning 
      * 
@@ -245,34 +284,68 @@ contract NFTAuctionFactory is Ownable {
         view
         returns(uint256)
     {
+        IAuction.BidStruct[] memory result = IAuction(auction).winning();
 
-        uint256 totalOffchainWinners = offchainWinners[auction].length;
-        //find in offchain list. be sure then not exceed maxWinners
-        uint256 totalInOffchain = auctions[auction].maxWinners < totalOffchainWinners ? auctions[auction].maxWinners : totalOffchainWinners;
-        for (uint256 i = 0; i < totalInOffchain; i++) {
-            if (offchainWinners[auction][i] == sender) {
-                return i+1;
-            }
-        }
-        // find in onchain list
-        if (auctions[auction].maxWinners > totalInOffchain) {
-            // function winning() external view returns (BidStruct[] memory result);
-            // struct BidStruct {
-            //     address bidder;
-            //     uint256 amount;
-            // }
-            IAuction.BidStruct[] memory result = IAuction(auction).winning();
+        uint256 orderInClaim = 0;
 
-            uint256 totalOnchainWinners = auctions[auction].maxWinners - totalInOffchain;
-            uint256 totalInOnchain = result.length > totalOnchainWinners ? totalOnchainWinners : result.length;
-            for (uint256 i = 0; i < totalInOnchain; i++) {
-                if (result[i].bidder == sender) {
-                    return totalInOffchain+1+i;
+        address offchainIndex = _nextOffchainBidder[auction][GUARD];
+        uint256 onchainIndex = 0;
+
+        while (orderInClaim <= auctions[auction].maxWinners) {
+            
+            //get first item from offchain list
+            uint256 amountFromOffchainList = offchainBidders[auction][offchainIndex];
+            //get first item from onchain list
+            uint256 amountFromOnchainList = onchainIndex >= result.length ? 0 : result[onchainIndex].amount;
+            // compare which bigger
+            // Keep in mind that indexes can exceed the bounds of the array size.  
+            // We have removed these checks.  
+            // In any cases, the variables `amountFromOffchainList` or `amountFromOnchainList` will set to zero.
+            if (amountFromOffchainList == amountFromOnchainList && amountFromOffchainList == 0) {
+                return 0;
+            } else if (amountFromOffchainList >= amountFromOnchainList) {
+                if (offchainIndex == sender) {
+                    return orderInClaim;
                 }
+                offchainIndex = _nextOffchainBidder[auction][offchainIndex];
+            } else {
+                if (result[onchainIndex].bidder == sender) {
+                    return orderInClaim;
+                }
+                onchainIndex++;
             }
+            
+            orderInClaim ++;
         }
-
         return 0;
+        
+        // uint256 totalOffchainWinners = offchainWinners[auction].length;
+        // //find in offchain list. be sure then not exceed maxWinners
+        // uint256 totalInOffchain = auctions[auction].maxWinners < totalOffchainWinners ? auctions[auction].maxWinners : totalOffchainWinners;
+        // for (uint256 i = 0; i < totalInOffchain; i++) {
+        //     if (offchainWinners[auction][i] == sender) {
+        //         return i+1;
+        //     }
+        // }
+        // // find in onchain list
+        // if (auctions[auction].maxWinners > totalInOffchain) {
+        //     // function winning() external view returns (BidStruct[] memory result);
+        //     // struct BidStruct {
+        //     //     address bidder;
+        //     //     uint256 amount;
+        //     // }
+        //     IAuction.BidStruct[] memory result = IAuction(auction).winning();
+
+        //     uint256 totalOnchainWinners = auctions[auction].maxWinners - totalInOffchain;
+        //     uint256 totalInOnchain = result.length > totalOnchainWinners ? totalOnchainWinners : result.length;
+        //     for (uint256 i = 0; i < totalInOnchain; i++) {
+        //         if (result[i].bidder == sender) {
+        //             return totalInOffchain+1+i;
+        //         }
+        //     }
+        // }
+
+        // return 0;
     }
 
     function requireOwnerNftContract(
@@ -280,6 +353,7 @@ contract NFTAuctionFactory is Ownable {
         address sender
     )
         internal
+        view
     {
         
         address auctionOwner = Ownable(nftcontract).owner();
@@ -293,6 +367,7 @@ contract NFTAuctionFactory is Ownable {
         address sender
     )
         internal
+        view
     {
         // check it is our auction
         requireExistsAuction(auction);
@@ -307,12 +382,128 @@ contract NFTAuctionFactory is Ownable {
         address auction
     )
         internal
+        view
     {
         // check it is our auction
         if (auctions[auction].exists == false) {
             revert UnknownAuction(auction);
         }
         
+    }
+
+    /**
+     * function for verify that value is between left and right address.
+     * @param auctionAddress auctionAddress
+     * @param prev prev bidder
+     * @param newAmount  new amount 
+     * @param next next bidder
+     * @return bool return true if left_value ≥ new_amount > right_value (here desc order)
+     */
+    function _verifyIndex(
+        address auctionAddress,
+        address prev, 
+        uint256 newAmount, 
+        address next
+    ) 
+        internal 
+        view 
+        returns(bool) 
+    {
+        return (prev == GUARD || offchainBidders[auctionAddress][prev] >= newAmount) &&
+               (next == GUARD || newAmount > offchainBidders[auctionAddress][next]);
+    }
+
+    /**
+     * helper function to find address that new value should insert after it.
+     * @param newAmount new amount
+     */
+    function _findIndex(
+        address auctionAddress,
+        uint256 newAmount
+    )
+        internal
+        view
+        returns(address )
+    {
+        address newBidder = GUARD;
+        while(true) {
+            if (_verifyIndex(auctionAddress, newBidder, newAmount, _nextOffchainBidder[auctionAddress][newBidder])) {
+                return newBidder;
+            }
+            newBidder = _nextOffchainBidder[auctionAddress][newBidder];
+        }
+
+        return newBidder;
+    }
+
+    function isPrev(
+        address auctionAddress,
+        address bidder, 
+        address prevBidder
+    )
+        internal
+        view
+        returns(bool)
+    {
+        return _nextOffchainBidder[auctionAddress][prevBidder] == bidder;
+    }
+
+    function findPrevBidder(
+        address auctionAddress,
+        address bidder
+    )
+        internal
+        view
+        returns(address)
+    {
+        address currentBidder = GUARD;
+        while(_nextOffchainBidder[auctionAddress][currentBidder] != GUARD) {
+            if (isPrev(auctionAddress, bidder, currentBidder)) {
+                return currentBidder;
+            }
+            currentBidder = _nextOffchainBidder[auctionAddress][currentBidder];
+        }
+        return address(0);
+    }
+
+    /**
+     * insert new item after valid address, update amount and increase listSize.
+     * @param auctionAddress auctionAddress
+     * @param bidder bidder
+     * @param amount amount
+     */
+    function _addOffchainBid(
+        address auctionAddress,
+        address bidder, 
+        uint256 amount
+    ) 
+        internal
+    {
+        require(_nextOffchainBidder[auctionAddress][bidder] == address(0));
+        address index = _findIndex(auctionAddress, amount);
+        offchainBidders[auctionAddress][bidder] = amount;
+        _nextOffchainBidder[auctionAddress][bidder] = _nextOffchainBidder[auctionAddress][index];
+        _nextOffchainBidder[auctionAddress][index] = bidder;
+        offchainSizeList[auctionAddress]++;
+    }
+
+    /**
+     * remove item, clean amount and decrease listSize
+     * @param auctionAddress auctionAddress
+     * @param bidder bidder
+     */
+    function _removeOffchainBid(
+        address auctionAddress,
+        address bidder
+    ) 
+        internal
+    {
+        require(_nextOffchainBidder[auctionAddress][bidder] != address(0));
+        address prevIndex = findPrevBidder(auctionAddress, bidder);
+        _nextOffchainBidder[auctionAddress][prevIndex] = _nextOffchainBidder[auctionAddress][bidder];
+        _nextOffchainBidder[auctionAddress][bidder] = address(0);
+        offchainBidders[auctionAddress][bidder] = 0;
+        offchainSizeList[auctionAddress]--;
     }
 
 }
